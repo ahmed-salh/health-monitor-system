@@ -1,13 +1,35 @@
 #include <math.h>
 
-//Start Wifi
+// Start GPS
+#include <TinyGPS++.h>
+#include <HardwareSerial.h>
+
+#define GPS_REPORTING_PERIOD_MS     10000
+
+#define RXD2 16
+#define TXD2 17
+
+TinyGPSPlus gps;
+HardwareSerial gpsSerial(1);
+
+float LAT = 0;
+float LONG = 0;
+float ALT = 0;
+
+TaskHandle_t GetGPSReadings;
+
+bool locationIsValid = false;
+uint32_t  gpsLastReport;
+// End GPS
+
+// Start Wifi
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
-#define WIFI_SSID "AHMED-SALEH"
-#define WIFI_PASSWORD "23Jan1999"
-//End Wifi
+#define WIFI_SSID "samy"
+#define WIFI_PASSWORD "s@m9102;++--SAMY31/12/2022"
+// End Wifi
 
-//Start Firebase
+// Start Firebase
 #include "addons/TokenHelper.h" //Provide the token generation process info.
 #include "addons/RTDBHelper.h"  //Provide the RTDB payload printing info and other helper functions.
 #define API_KEY "AIzaSyD50cT994tyyc4B_OS9QIR9qTolE3ZsRzU" // Insert Firebase project API Key
@@ -22,10 +44,14 @@ bool signupOK = false;
 // End Firebase
 
 // Start Function Declaration
-void SendReadingsToFirebase();
-void InitializeWifi();
 void SignUpToFirebase();
+void InitializeWifi();
 void InitializePOX();
+void InitializeGPS();
+
+void SendReadingsToFirebase();
+void SensorReadings();
+void GetLocalGPS();
 // End Function Declaration
 
 // Start Pulse Oximeter
@@ -36,11 +62,11 @@ void InitializePOX();
 PulseOximeter pox;  // Create a PulseOximeter object
 
 TaskHandle_t GetReadings;
+
 uint8_t _spo2;
 uint8_t _heartRate;
 
 uint32_t poxLastReport = 0;
-uint32_t prevMillis = 0;
 // End Pulse Oximeter
 
 void setup() {
@@ -51,11 +77,15 @@ void setup() {
 
   SignUpToFirebase();
 
+  InitializeGPS();
+  
   InitializePOX();
 
   xTaskCreatePinnedToCore(SensorReadings, "GetReadings", 1724, NULL, 0, &GetReadings, 0);
+
+  xTaskCreatePinnedToCore(GetLocalGPS, "GetGPSReadings", 1124, NULL, 0, &GetGPSReadings, 0);
   
-  xTaskCreatePinnedToCore(SendReadingsToFirebase, "PostToFirebase", 6268, NULL, 0, &PostToFirebase, 1);
+  xTaskCreatePinnedToCore(SendReadingsToFirebase, "PostToFirebase", 6500, NULL, 0, &PostToFirebase, 1);
 }
 
 void SensorReadings(void * parameter)
@@ -77,15 +107,6 @@ void SensorReadings(void * parameter)
     
       poxLastReport = millis();
     }
-    // Memory Sizing
-    //if (millis() - prevMillis > 6000)
-    //{
-    //  unsigned long remainingStack = uxTaskGetStackHighWaterMark(NULL);
-    //  Serial.print("Free stack: ");
-    //  Serial.print(remainingStack);
-    //  prevMillis = millis();
-    //}
-    // End Memory Sizing
   }
 }
 
@@ -99,20 +120,27 @@ void SendReadingsToFirebase(void * parameter)
           Serial.println("PATH: " + FirebaseData.dataPath());
           Serial.println("TYPE: " + FirebaseData.dataType());
       }
-      else 
-      {
-          Serial.println("Failed to send Heartrate");
-          Serial.println("REASON: " + FirebaseData.errorReason());
-      }
     
       if (Firebase.RTDB.setInt(&FirebaseData, "SPO2", _spo2)){
           Serial.println("PATH: " + FirebaseData.dataPath());
           Serial.println("TYPE: " + FirebaseData.dataType());
-     }
-      else 
-      {
-          Serial.println("Failed to send SPO2");
-          Serial.println("REASON: " + FirebaseData.errorReason());
+      }
+      
+      if(locationIsValid){
+          if (Firebase.RTDB.setFloat(&FirebaseData, "LATITUDE", LAT)){
+              Serial.println("PATH: " + FirebaseData.dataPath());
+              Serial.println("TYPE: " + FirebaseData.dataType());
+          }
+      
+          if (Firebase.RTDB.setFloat(&FirebaseData, "LONGITUDE", LONG)){
+              Serial.println("PATH: " + FirebaseData.dataPath());
+              Serial.println("TYPE: " + FirebaseData.dataType());
+          }
+
+          if (Firebase.RTDB.setFloat(&FirebaseData, "ALTITUDE", ALT)){
+              Serial.println("PATH: " + FirebaseData.dataPath());
+              Serial.println("TYPE: " + FirebaseData.dataType());
+          }
       }
     }
   }
@@ -175,6 +203,43 @@ void InitializePOX()
 
   // Configure sensor to use 7.6mA for LED drive
   //pox.setIRLedCurrent(MAX30100_LED_CURR_7_6MA);
+}
+
+void GetLocalGPS(void * parameter)
+{
+  for(;;){
+    
+    smartdelay(GPS_REPORTING_PERIOD_MS);
+
+    if(gps.location.isValid())
+    {
+      locationIsValid = true;
+          
+      LAT = gps.location.lat();
+      LONG = gps.location.lng();
+      ALT = gps.altitude.meters();
+    }
+    else
+    {
+      locationIsValid = false;
+    }
+  }
+}
+
+void InitializeGPS()
+{
+  //Begin serial communication Neo6mGPS
+  gpsSerial.begin(9600, SERIAL_8N1, RXD2, TXD2);
+}
+
+static void smartdelay(unsigned long ms)
+{
+  unsigned long start = millis();
+  do 
+  {
+    while (gpsSerial.available())
+      gps.encode(gpsSerial.read());
+  } while (millis() - start < ms);
 }
 
 void loop()
